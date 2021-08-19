@@ -9,12 +9,20 @@ import random
 import tensorflow as tf
 import tensorflow_hub as hub
 
+from decimal import Decimal, getcontext
+
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, SequentialSampler, TensorDataset
 
 from BERT.tokenization import BertTokenizer
 from BERT.modeling import BertForSequenceClassification, BertConfig
+
+from transformers import DistilBertForSequenceClassification
+
+
+# i do not have 30gb ram
+getcontext().prec = 16
 
 
 class USE(object):
@@ -71,7 +79,8 @@ class NLI_infer_BERT(nn.Module):
                  max_seq_length=128,
                  batch_size=32):
         super(NLI_infer_BERT, self).__init__()
-        self.model = BertForSequenceClassification.from_pretrained(pretrained_dir, num_labels=nclasses).cuda()
+        # change from bert to distilbert, also removed cudas
+        self.model = DistilBertForSequenceClassification.from_pretrained(pretrained_dir, num_labels=nclasses)
 
         # construct dataset loader
         self.dataset = NLIDataset_BERT(pretrained_dir, max_seq_length=max_seq_length, batch_size=batch_size)
@@ -86,9 +95,9 @@ class NLI_infer_BERT(nn.Module):
         probs_all = []
         #         for input_ids, input_mask, segment_ids in tqdm(dataloader, desc="Evaluating"):
         for input_ids, input_mask, segment_ids in dataloader:
-            input_ids = input_ids.cuda()
-            input_mask = input_mask.cuda()
-            segment_ids = segment_ids.cuda()
+            input_ids = input_ids
+            input_mask = input_mask
+            segment_ids = segment_ids
 
             with torch.no_grad():
                 logits = self.model(input_ids, segment_ids, input_mask)
@@ -283,7 +292,7 @@ def attack(text_ls, true_label, predictor, stop_words_set, word2idx, idx2word, c
                 break
             else:
                 new_label_probs = new_probs[:, orig_label] + torch.from_numpy(
-                        (semantic_sims < sim_score_threshold) + (1 - pos_mask).astype(float)).float().cuda()
+                        (semantic_sims < sim_score_threshold) + (1 - pos_mask).astype(float)).float()
                 new_label_prob_min, new_label_prob_argmin = torch.min(new_label_probs, dim=-1)
                 if new_label_prob_min < orig_prob:
                     text_prime[idx] = synonyms[new_label_prob_argmin]
@@ -368,7 +377,7 @@ def random_attack(text_ls, true_label, predictor, perturb_ratio, stop_words_set,
                 break
             else:
                 new_label_probs = new_probs[:, orig_label] + torch.from_numpy(
-                        (semantic_sims < sim_score_threshold) + (1 - pos_mask).astype(float)).float().cuda()
+                        (semantic_sims < sim_score_threshold) + (1 - pos_mask).astype(float)).float()
                 new_label_prob_min, new_label_prob_argmin = torch.min(new_label_probs, dim=-1)
                 if new_label_prob_min < orig_prob:
                     text_prime[idx] = synonyms[new_label_prob_argmin]
@@ -470,11 +479,11 @@ def main():
     # construct the model
     print("Building Model...")
     if args.target_model == 'wordLSTM':
-        model = Model(args.word_embeddings_path, nclasses=args.nclasses).cuda()
+        model = Model(args.word_embeddings_path, nclasses=args.nclasses)
         checkpoint = torch.load(args.target_model_path, map_location='cuda:0')
         model.load_state_dict(checkpoint)
     elif args.target_model == 'wordCNN':
-        model = Model(args.word_embeddings_path, nclasses=args.nclasses, hidden_size=100, cnn=True).cuda()
+        model = Model(args.word_embeddings_path, nclasses=args.nclasses, hidden_size=100, cnn=True)
         checkpoint = torch.load(args.target_model_path, map_location='cuda:0')
         model.load_state_dict(checkpoint)
     elif args.target_model == 'bert':
@@ -506,9 +515,9 @@ def main():
         embeddings = []
         with open(args.counter_fitting_embeddings_path, 'r') as ifile:
             for line in ifile:
-                embedding = [float(num) for num in line.strip().split()[1:]]
+                embedding = [Decimal(num) for num in line.strip().split()[1:]]
                 embeddings.append(embedding)
-        embeddings = np.array(embeddings)
+        embeddings = np.array(embeddings, dtype=np.float16)
         product = np.dot(embeddings, embeddings.T)
         norm = np.linalg.norm(embeddings, axis=1, keepdims=True)
         cos_sim = product / np.dot(norm, norm.T)
